@@ -50,4 +50,4 @@ jobs:
 
     # 6. تشغيل سكربت جلب ومعالجة العملات (Frankfurter)
     - name: Run Currency Pipeline
-      run: python src/currency_pipeline.py
+      run: python src/currency_data_processing.py
