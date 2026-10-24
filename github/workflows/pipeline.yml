@@ -1,0 +1,53 @@
+name: Medallion E2E Pipeline Automation
+
+on:
+  # جدولة التشغيل تلقائياً (مثلاً: يومياً الساعة 6 صباحاً بتوقيت UTC)
+  schedule:
+    - cron: '0 6 * * *'
+  
+  # السماح بالتشغيل اليدوي أيضاً من واجهة GitHub
+  workflow_dispatch:
+
+jobs:
+  run-etl-pipelines:
+    runs-on: ubuntu-latest
+    
+    # أذونات ضرورية لتفعيل المصادقة عبر Workload Identity Federation
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+    # 1. سحب كود المشروع من المستودع
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    # 2. إعداد بيئة بايثون
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    # 3. تثبيت Java (مطلوب أساسي لتشغيل PySpark على السيرفر)
+    - name: Set up Java JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '11'
+
+    # 4. تثبيت المكتبات المطلوبة بايثون
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pandas google-cloud-bigquery pyspark
+
+    # 5. المصادقة الآمنة مع Google Cloud (بدون مفاتيح سرية مكشوفة)
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: 'projects/191157402123/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+        service_account: 'import-data@dummyjson-e2e-pipeline.iam.gserviceaccount.com'
+
+    # 6. تشغيل سكربت جلب ومعالجة العملات (Frankfurter)
+    - name: Run Currency Pipeline
+      run: python scripts/currency_pipeline.py
