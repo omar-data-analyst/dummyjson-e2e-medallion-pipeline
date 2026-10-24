@@ -1,7 +1,7 @@
 name: Medallion E2E Pipeline Automation
 
 on:
-  # جدولة التشغيل تلقائياً (مثلاً: يومياً الساعة 6 صباحاً بتوقيت UTC)
+  # جدولة التشغيل تلقائياً (يومياً الساعة 6 صباحاً بتوقيت UTC)
   schedule:
     - cron: '0 6 * * *'
   
@@ -41,13 +41,13 @@ jobs:
         python -m pip install --upgrade pip
         pip install requests pandas google-cloud-bigquery pyspark
 
-    # 5. المصادقة الآمنة مع Google Cloud (بدون مفاتيح سرية مكشوفة)
+    # 5. المصادقة الآمنة مع Google Cloud (مطابق لحساب الخدمة الذي أنشأناه)
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
         workload_identity_provider: 'projects/191157402123/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
-        service_account: 'import-data@dummyjson-e2e-pipeline.iam.gserviceaccount.com'
+        service_account: 'github-actions-sa@dummyjson-e2e-pipeline.iam.gserviceaccount.com'
 
     # 6. تشغيل سكربت جلب ومعالجة العملات (Frankfurter)
     - name: Run Currency Pipeline
-      run: python scripts/currency_pipeline.py
+      run: python src/currency_pipeline.py
