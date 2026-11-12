@@ -47,3 +47,7 @@ jobs:
     # 6. تشغيل سكربت معالجة العملات
     - name: Run Currency Pipeline
       run: python src/currency_data_processing.py
+
+    # 7.Run Orders Data Pipline
+    - name: Run Orders Pipline
+      run: python src/orders_data_processing.py
