@@ -336,7 +336,10 @@ fact_orders = df_silver.select('cart_id',
                                'product_price',
                                'product_total_price',
                                'product_discounted_total',
-                               'product_discount_amount')
+                               'product_discount_amount',
+                               'bronze_loaded_at',
+                               'silver_loaded_at',
+                               'gold_loaded_at')
 
 # Show Results
 fact_orders.printSchema()
