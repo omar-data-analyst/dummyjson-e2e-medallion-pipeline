@@ -69,8 +69,7 @@ df_bronze = raw_df.select(
     "discountedTotal",
     "totalProducts",
     "totalQuantity",
-    'bronze_loaded_at',
-
+    
     # Unpacking Internal Columns in Product column
     F.col("product.id").alias("product_id"),
     F.col("product.title").alias("product_title"),
