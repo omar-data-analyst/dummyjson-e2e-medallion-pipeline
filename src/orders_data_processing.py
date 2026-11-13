@@ -59,7 +59,6 @@ df_bronze = raw_df.select(
     "discountedTotal",
     "totalProducts",
     "totalQuantity",
-    'bronze_loaded_at',
     F.explode("products").alias("product")
 
     ).select(
