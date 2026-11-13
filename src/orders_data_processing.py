@@ -15,6 +15,7 @@ import requests
 from google.cloud import bigquery
 from datetime import datetime
 from pyspark.sql import SparkSession ,functions as F
+from google.cloud.exceptions import NotFound
 from pyspark.sql.functions.builtin import product
 from pyspark.sql.types import StringType , NumericType
 from pyspark.sql.functions import col, element_at , concat_ws ,current_timestamp ,to_date, coalesce, trim, date_format, to_date, coalesce, lit ,when
@@ -98,51 +99,61 @@ df_bronze.show(10, truncate=False)
 
 """### Exproting Data to bronze layer"""
 
-# 1. تحويل بيانات سبارك إلى Pandas DataFrame (كما كنت تفعل)
-pandas_df_bronze = df_bronze.toPandas()
-
-# 2. تحديد مسار الجدول الأصلي والجدول المؤقت (Temporary Table)
+# 1. تحديد أسماء الجداول والمسارات
 project_id = "dummyjson-e2e-pipeline"
 client = bigquery.Client(project=project_id)
-table_id_bronze = f"{project_id}.bronze.orders_raw"
 
-# جدول مؤقت يتم إنشاؤه وحذفه تلقائياً لتجنب تراكم البيانات
+table_id_bronze = f"{project_id}.bronze.orders_raw"
 temp_table_id = f"{project_id}.bronze.orders_raw_temp"
 
-# إعدادات الرفع للجدول المؤقت (نستخدم WRITE_TRUNCATE لتفريغه وملئه بالدفعة الجديدة فقط)
+
+# Upload Data for the Temp Table
+pandas_df_bronze = df_bronze.toPandas()
 job_config = bigquery.LoadJobConfig(
     write_disposition="WRITE_TRUNCATE"
 )
-
-# الخطوة أ: رفع البيانات المؤقتة
 job = client.load_table_from_dataframe(pandas_df_bronze, temp_table_id, job_config=job_config)
 job.result()
 
-# الخطوة ب: كتابة وتنفذ استعلام الـ MERGE في BigQuery
-merge_query = f"""
-MERGE `dummyjson-e2e-pipeline.bronze.orders_raw` T
-USING `dummyjson-e2e-pipeline.bronze.temp_table_id` S
-ON T.order_id = S.order_id
-WHEN MATCHED THEN
-  UPDATE SET
-    T.total = S.total,
-    T.discountedTotal = S.discountedTotal,
-    T.totalProducts = S.totalProducts,
-    T.totalQuantity = S.totalQuantity,
-    T.product_price = S.product_price,
-    T.product_quantity = S.product_quantity,
-    T.product_total_price = S.product_total_price,
-    T.product_discount_percentage = S.product_discount_percentage,
-    T.product_discounted_total = S.product_discounted_total
-WHEN NOT MATCHED THEN
-  INSERT ROW;
-"""
+# Check if main table exists or not
+try:
+    client.get_table(table_id_bronze)
+    table_exists = True
+except NotFound:
+    table_exists = False
 
-# تنفيذ استعلام الـ Merge
-query_job = client.query(merge_query)
-query_job.result()  # انتظار اكتمال عملية الدمج
 
-print("Successfully merged data into the Bronze layer table in BigQuery based on order_id.")
+if not table_exists:
+
+    create_table_query = f"""
+    CREATE TABLE `{table_id_bronze}` AS
+    SELECT * FROM `{temp_table_id}`
+    """
+
+    client.query(create_table_query).result()
+    print(f"Table {table_id_bronze} did not exist. Created it successfully and loaded data.")
+
+else:
+    merge_query = f"""
+    MERGE `{table_id_bronze}` T
+    USING `{temp_table_id}` S
+    ON T.order_id = S.order_id
+    WHEN MATCHED THEN
+      UPDATE SET
+        T.total = S.total,
+        T.discountedTotal = S.discountedTotal,
+        T.totalProducts = S.totalProducts,
+        T.totalQuantity = S.totalQuantity,
+        T.product_price = S.product_price,
+        T.product_quantity = S.product_quantity,
+        T.product_total_price = S.product_total_price,
+        T.product_discount_percentage = S.product_discount_percentage,
+        T.product_discounted_total = S.product_discounted_total
+    WHEN NOT MATCHED THEN
+      INSERT ROW;
+    """
+    client.query(merge_query).result()
+    print("Successfully merged data into the existing table based on order_id.")
 
 """### Cleaning Stage
 
@@ -247,51 +258,60 @@ df_bronze.select(
 # Add silver_loaded_at col
 df_silver = df_bronze.withColumn("silver_loaded_at", current_timestamp())
 
-# 1. تحويل بيانات سبارك إلى Pandas DataFrame (كما كنت تفعل)
-pandas_df_bronze = df_silver.toPandas()
-
-# 2. تحديد مسار الجدول الأصلي والجدول المؤقت (Temporary Table)
+# Detect project & table ids
 project_id = "dummyjson-e2e-pipeline"
 client = bigquery.Client(project=project_id)
-table_id_silver = f"{project_id}.silver.orders"
 
-# جدول مؤقت يتم إنشاؤه وحذفه تلقائياً لتجنب تراكم البيانات
+table_id_silver = f"{project_id}.silver.orders"
 temp_table_id = f"{project_id}.silver.orders_temp"
 
-# إعدادات الرفع للجدول المؤقت (نستخدم WRITE_TRUNCATE لتفريغه وملئه بالدفعة الجديدة فقط)
+# Upload Data for the Temp Table
+pandas_df_silver = df_silver.toPandas()
 job_config = bigquery.LoadJobConfig(
     write_disposition="WRITE_TRUNCATE"
 )
-
-# الخطوة أ: رفع البيانات المؤقتة
-job = client.load_table_from_dataframe(pandas_df_bronze, temp_table_id, job_config=job_config)
+job = client.load_table_from_dataframe(pandas_df_silver, temp_table_id, job_config=job_config)
 job.result()
 
-# الخطوة ب: كتابة وتنفذ استعلام الـ MERGE في BigQuery
-merge_query = f"""
-MERGE `{table_id_silver}` T
-USING `{temp_table_id}` S
-ON T.order_id = S.order_id
-WHEN MATCHED THEN
-  UPDATE SET
-    T.total = S.total,
-    T.discountedTotal = S.discountedTotal,
-    T.totalProducts = S.totalProducts,
-    T.totalQuantity = S.totalQuantity,
-    T.product_price = S.product_price,
-    T.product_quantity = S.product_quantity,
-    T.product_total_price = S.product_total_price,
-    T.product_discount_percentage = S.product_discount_percentage,
-    T.product_discounted_total = S.product_discounted_total
-WHEN NOT MATCHED THEN
-  INSERT ROW;
-"""
+# Check if main table exists or not
+try:
+    client.get_table(table_id_silver)
+    table_exists = True
+except NotFound:
+    table_exists = False
 
-# تنفيذ استعلام الـ Merge
-query_job = client.query(merge_query)
-query_job.result()  # انتظار اكتمال عملية الدمج
 
-print("Successfully merged data into the Silver layer table in BigQuery based on order_id.")
+if not table_exists:
+
+    create_table_query = f"""
+    CREATE TABLE `{table_id_silver}` AS
+    SELECT * FROM `{temp_table_id}`
+    """
+
+    client.query(create_table_query).result()
+    print(f"Table {table_id_silver} did not exist. Created it successfully and loaded data.")
+
+else:
+    merge_query = f"""
+    MERGE `{table_id_silver}` T
+    USING `{temp_table_id}` S
+    ON T.order_id = S.order_id
+    WHEN MATCHED THEN
+      UPDATE SET
+        T.total = S.total,
+        T.discountedTotal = S.discountedTotal,
+        T.totalProducts = S.totalProducts,
+        T.totalQuantity = S.totalQuantity,
+        T.product_price = S.product_price,
+        T.product_quantity = S.product_quantity,
+        T.product_total_price = S.product_total_price,
+        T.product_discount_percentage = S.product_discount_percentage,
+        T.product_discounted_total = S.product_discounted_total
+    WHEN NOT MATCHED THEN
+      INSERT ROW;
+    """
+    client.query(merge_query).result()
+    print("Successfully merged data into the existing table based on order_id.")
 
 # Add currency column
 df_silver = df_silver.withColumn("currency", lit("USD"))
@@ -336,46 +356,79 @@ df_gold = df_gold.withColumn("date", to_date(current_timestamp()))
 df_gold.printSchema()
 df_gold.show()
 
-# 1. تحويل بيانات سبارك إلى Pandas DataFrame (كما كنت تفعل)
-pandas_df_gold = fact_orders.toPandas()
+### Uploading for Gold Layer
 
-# 2. تحديد مسار الجدول الأصلي والجدول المؤقت (Temporary Table)
+# Add gold_loaded_at & Drop silver_loaded_at
+df_gold = df_silver.withColumn("gold_loaded_at", current_timestamp())
+
+# Add Date column
+df_gold = df_gold.withColumn("date", to_date(current_timestamp()))
+
+### Extracting sub-tables (تأكدنا من إضافة order_id لكي ينجح شرط الـ MERGE)
+fact_orders = df_gold.select(
+    'order_id',
+    'cart_id',
+    F.col('userId').alias('user_id'),
+    'product_id',
+    'product_quantity',
+    'product_price',
+    'product_total_price',
+    'product_discounted_total',
+    'product_discount_amount',
+    'gold_loaded_at',
+    'date'
+)
+
+# Show Results
+fact_orders.printSchema()
+fact_orders.show()
+
+# Detect project & table ids
 project_id = "dummyjson-e2e-pipeline"
 client = bigquery.Client(project=project_id)
-table_id_gold = f"{project_id}.gold.fact_orders"
 
-# جدول مؤقت يتم إنشاؤه وحذفه تلقائياً لتجنب تراكم البيانات
+table_id_gold = f"{project_id}.gold.fact_orders"
 temp_table_id = f"{project_id}.gold.orders_temp"
 
-# إعدادات الرفع للجدول المؤقت (نستخدم WRITE_TRUNCATE لتفريغه وملئه بالدفعة الجديدة فقط)
+# Upload Data for the Temp Table
+pandas_df_gold = fact_orders.toPandas()
 job_config = bigquery.LoadJobConfig(
     write_disposition="WRITE_TRUNCATE"
 )
-
-# الخطوة أ: رفع البيانات المؤقتة
 job = client.load_table_from_dataframe(pandas_df_gold, temp_table_id, job_config=job_config)
 job.result()
 
-# الخطوة ب: كتابة وتنفذ استعلام الـ MERGE في BigQuery
-merge_query = f"""
-MERGE `{table_id_gold}` T
-USING `{temp_table_id}` S
-ON T.order_id = S.order_id
-WHEN MATCHED THEN
-  UPDATE SET
-    T.product_price = S.product_price,
-    T.product_quantity = S.product_quantity,
-    T.product_total_price = S.product_total_price,
-    T.product_discounted_total = S.product_discounted_total,
-    T.product_discount_amount = S.product_discount_amount,
-    T.gold_loaded_at = S.gold_loaded_at,
-    T.date = S.date
-WHEN NOT MATCHED THEN
-  INSERT ROW;
-"""
+# Check if main table exists or not
+try:
+    client.get_table(table_id_gold)
+    table_exists = True
+except NotFound:
+    table_exists = False
 
-# تنفيذ استعلام الـ Merge
-query_job = client.query(merge_query)
-query_job.result()  # انتظار اكتمال عملية الدمج
+if not table_exists:
+    create_table_query = f"""
+    CREATE TABLE `{table_id_gold}` AS
+    SELECT * FROM `{temp_table_id}`
+    """
+    client.query(create_table_query).result()
+    print(f"Table {table_id_gold} did not exist. Created it successfully and loaded data.")
 
-print("Successfully merged data into the Gold layer table in BigQuery based on order_id.")
+else:
+    merge_query = f"""
+    MERGE `{table_id_gold}` T
+    USING `{temp_table_id}` S
+    ON T.order_id = S.order_id
+    WHEN MATCHED THEN
+      UPDATE SET
+        T.product_price = S.product_price,
+        T.product_quantity = S.product_quantity,
+        T.product_total_price = S.product_total_price,
+        T.product_discounted_total = S.product_discounted_total,
+        T.product_discount_amount = S.product_discount_amount,
+        T.gold_loaded_at = S.gold_loaded_at,
+        T.date = S.date
+    WHEN NOT MATCHED THEN
+      INSERT ROW;
+    """
+    client.query(merge_query).result()
+    print("Successfully merged data into the existing table based on order_id.")
