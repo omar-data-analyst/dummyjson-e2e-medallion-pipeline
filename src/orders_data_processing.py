@@ -13,6 +13,7 @@ Original file is located at
 import json
 import requests
 from google.cloud import bigquery
+import pandas as pd
 from datetime import datetime
 from pyspark.sql import SparkSession ,functions as F
 from google.cloud.exceptions import NotFound
@@ -41,6 +42,8 @@ if response.status_code == 200:
 else:
   print('Error Connection')
 
+
+
 # Show Results
 raw_df.printSchema()
 raw_df.show()
@@ -68,7 +71,7 @@ df_bronze = raw_df.select(
     "discountedTotal",
     "totalProducts",
     "totalQuantity",
-    
+
     # Unpacking Internal Columns in Product column
     F.col("product.id").alias("product_id"),
     F.col("product.title").alias("product_title"),
@@ -97,61 +100,39 @@ df_bronze.show(10, truncate=False)
 
 """### Exproting Data to bronze layer"""
 
-# 1. تحديد أسماء الجداول والمسارات
+# Detect project & table ids
 project_id = "dummyjson-e2e-pipeline"
+table_id_bronze = f"{project_id}.bronze.orders"
 client = bigquery.Client(project=project_id)
+table_id_bronze = f"{project_id}.bronze.orders"
 
-table_id_bronze = f"{project_id}.bronze.orders_raw"
-temp_table_id = f"{project_id}.bronze.orders_raw_temp"
+new_pandas_df = df_bronze.toPandas()
 
+try:
+    # Import Old Table
+    query = f"SELECT * FROM `{table_id_bronze}`"
+    old_pandas_df = client.query(query).to_dataframe()
 
-# Upload Data for the Temp Table
-pandas_df_bronze = df_bronze.toPandas()
+    # Merge old whith new table
+    import pandas as pd
+    combined_df = pd.concat([old_pandas_df, new_pandas_df], ignore_index=True)
+
+    # Drop Duplicates depend on order_id col
+    combined_df = combined_df.drop_duplicates(subset=['order_id'], keep='last')
+    print("Successfully merged old bronze data with new data locally.")
+
+except Exception as e:
+    # If old Table was not esxist
+    print(f"bronze table does not exist yet or first run. Using new data only. Error: {e}")
+    combined_df = new_pandas_df
+
 job_config = bigquery.LoadJobConfig(
     write_disposition="WRITE_TRUNCATE"
 )
-job = client.load_table_from_dataframe(pandas_df_bronze, temp_table_id, job_config=job_config)
+job = client.load_table_from_dataframe(combined_df, table_id_bronze, job_config=job_config)
 job.result()
 
-# Check if main table exists or not
-try:
-    client.get_table(table_id_bronze)
-    table_exists = True
-except NotFound:
-    table_exists = False
-
-
-if not table_exists:
-
-    create_table_query = f"""
-    CREATE TABLE `{table_id_bronze}` AS
-    SELECT * FROM `{temp_table_id}`
-    """
-
-    client.query(create_table_query).result()
-    print(f"Table {table_id_bronze} did not exist. Created it successfully and loaded data.")
-
-else:
-    merge_query = f"""
-    MERGE `{table_id_bronze}` T
-    USING `{temp_table_id}` S
-    ON T.order_id = S.order_id
-    WHEN MATCHED THEN
-      UPDATE SET
-        T.total = S.total,
-        T.discountedTotal = S.discountedTotal,
-        T.totalProducts = S.totalProducts,
-        T.totalQuantity = S.totalQuantity,
-        T.product_price = S.product_price,
-        T.product_quantity = S.product_quantity,
-        T.product_total_price = S.product_total_price,
-        T.product_discount_percentage = S.product_discount_percentage,
-        T.product_discounted_total = S.product_discounted_total
-    WHEN NOT MATCHED THEN
-      INSERT ROW;
-    """
-    client.query(merge_query).result()
-    print("Successfully merged data into the existing table based on order_id.")
+print(f"Successfully uploaded {len(combined_df)} rows to {table_id_bronze}.")
 
 """### Cleaning Stage
 
@@ -259,57 +240,35 @@ df_silver = df_bronze.withColumn("silver_loaded_at", current_timestamp())
 # Detect project & table ids
 project_id = "dummyjson-e2e-pipeline"
 client = bigquery.Client(project=project_id)
-
 table_id_silver = f"{project_id}.silver.orders"
-temp_table_id = f"{project_id}.silver.orders_temp"
 
-# Upload Data for the Temp Table
-pandas_df_silver = df_silver.toPandas()
+new_pandas_df = df_silver.toPandas()
+
+try:
+    # Import Old Table
+    query = f"SELECT * FROM `{table_id_silver}`"
+    old_pandas_df = client.query(query).to_dataframe()
+
+    # Merge old whith new table
+    import pandas as pd
+    combined_df = pd.concat([old_pandas_df, new_pandas_df], ignore_index=True)
+
+    # Drop Duplicates depend on order_id col
+    combined_df = combined_df.drop_duplicates(subset=['order_id'], keep='last')
+    print("Successfully merged old Silver data with new data locally.")
+
+except Exception as e:
+    # If old Table was not esxist
+    print(f"Silver table does not exist yet or first run. Using new data only. Error: {e}")
+    combined_df = new_pandas_df
+
 job_config = bigquery.LoadJobConfig(
     write_disposition="WRITE_TRUNCATE"
 )
-job = client.load_table_from_dataframe(pandas_df_silver, temp_table_id, job_config=job_config)
+job = client.load_table_from_dataframe(combined_df, table_id_silver, job_config=job_config)
 job.result()
 
-# Check if main table exists or not
-try:
-    client.get_table(table_id_silver)
-    table_exists = True
-except NotFound:
-    table_exists = False
-
-
-if not table_exists:
-
-    create_table_query = f"""
-    CREATE TABLE `{table_id_silver}` AS
-    SELECT * FROM `{temp_table_id}`
-    """
-
-    client.query(create_table_query).result()
-    print(f"Table {table_id_silver} did not exist. Created it successfully and loaded data.")
-
-else:
-    merge_query = f"""
-    MERGE `{table_id_silver}` T
-    USING `{temp_table_id}` S
-    ON T.order_id = S.order_id
-    WHEN MATCHED THEN
-      UPDATE SET
-        T.total = S.total,
-        T.discountedTotal = S.discountedTotal,
-        T.totalProducts = S.totalProducts,
-        T.totalQuantity = S.totalQuantity,
-        T.product_price = S.product_price,
-        T.product_quantity = S.product_quantity,
-        T.product_total_price = S.product_total_price,
-        T.product_discount_percentage = S.product_discount_percentage,
-        T.product_discounted_total = S.product_discounted_total
-    WHEN NOT MATCHED THEN
-      INSERT ROW;
-    """
-    client.query(merge_query).result()
-    print("Successfully merged data into the existing table based on order_id.")
+print(f"Successfully uploaded {len(combined_df)} rows to {table_id_silver}.")
 
 # Add currency column
 df_silver = df_silver.withColumn("currency", lit("USD"))
@@ -327,26 +286,6 @@ df_silver = df_silver.withColumn(
 # Show Results
 df_silver.select(['product_discounted_total','product_total_price',"product_discount_amount"]).show()
 
-"""### Extracting sub-tables"""
-
-fact_orders = df_silver.select('cart_id',
-                               F.col('userId').alias('user_id'),
-                               'product_id',
-                               'product_quantity',
-                               'product_price',
-                               'product_total_price',
-                               'product_discounted_total',
-                               'product_discount_amount',
-                               'bronze_loaded_at',
-                               'silver_loaded_at',
-                               'gold_loaded_at')
-
-# Show Results
-fact_orders.printSchema()
-fact_orders.show()
-
-"""### Uploading for Gold Layer"""
-
 # Add gold_loaded_at & Drop silver_loaded_at
 df_gold = df_silver.withColumn("gold_loaded_at", current_timestamp())
 
@@ -357,79 +296,55 @@ df_gold = df_gold.withColumn("date", to_date(current_timestamp()))
 df_gold.printSchema()
 df_gold.show()
 
-### Uploading for Gold Layer
+"""### Extracting sub-tables"""
 
-# Add gold_loaded_at & Drop silver_loaded_at
-df_gold = df_silver.withColumn("gold_loaded_at", current_timestamp())
-
-# Add Date column
-df_gold = df_gold.withColumn("date", to_date(current_timestamp()))
-
-### Extracting sub-tables (تأكدنا من إضافة order_id لكي ينجح شرط الـ MERGE)
-fact_orders = df_gold.select(
-    'order_id',
-    'cart_id',
-    F.col('userId').alias('user_id'),
-    'product_id',
-    'product_quantity',
-    'product_price',
-    'product_total_price',
-    'product_discounted_total',
-    'product_discount_amount',
-    'gold_loaded_at',
-    'date'
-)
+fact_orders = df_gold.select('cart_id',
+                             'order_id',
+                              F.col('userId').alias('user_id'),
+                              'product_id',
+                              'product_quantity',
+                              'product_price',
+                              'product_total_price',
+                              'product_discounted_total',
+                              'product_discount_amount',
+                              'bronze_loaded_at',
+                              'silver_loaded_at',
+                              'gold_loaded_at')
 
 # Show Results
 fact_orders.printSchema()
 fact_orders.show()
 
+"""### Uploading for Gold Layer"""
+
 # Detect project & table ids
 project_id = "dummyjson-e2e-pipeline"
 client = bigquery.Client(project=project_id)
+table_id_gold = f"{project_id}.gold.orders"
 
-table_id_gold = f"{project_id}.gold.fact_orders"
-temp_table_id = f"{project_id}.gold.orders_temp"
+new_pandas_df = fact_orders.toPandas()
 
-# Upload Data for the Temp Table
-pandas_df_gold = fact_orders.toPandas()
+try:
+    # Import Old Table
+    query = f"SELECT * FROM `{table_id_gold}`"
+    old_pandas_df = client.query(query).to_dataframe()
+
+    # Merge old whith new table
+    combined_df = pd.concat([old_pandas_df, new_pandas_df], ignore_index=True)
+
+    # Drop Duplicates depend on order_id col
+    combined_df = combined_df.drop_duplicates(subset=['order_id'], keep='last')
+    print("Successfully merged old Gold data with new data locally.")
+
+except Exception as e:
+    # If old Table was not esxist
+    print(f"Gold table does not exist yet or first run. Using new data only. Error: {e}")
+    combined_df = new_pandas_df
+
 job_config = bigquery.LoadJobConfig(
     write_disposition="WRITE_TRUNCATE"
 )
-job = client.load_table_from_dataframe(pandas_df_gold, temp_table_id, job_config=job_config)
+job = client.load_table_from_dataframe(combined_df, table_id_gold, job_config=job_config)
 job.result()
 
-# Check if main table exists or not
-try:
-    client.get_table(table_id_gold)
-    table_exists = True
-except NotFound:
-    table_exists = False
-
-if not table_exists:
-    create_table_query = f"""
-    CREATE TABLE `{table_id_gold}` AS
-    SELECT * FROM `{temp_table_id}`
-    """
-    client.query(create_table_query).result()
-    print(f"Table {table_id_gold} did not exist. Created it successfully and loaded data.")
-
-else:
-    merge_query = f"""
-    MERGE `{table_id_gold}` T
-    USING `{temp_table_id}` S
-    ON T.order_id = S.order_id
-    WHEN MATCHED THEN
-      UPDATE SET
-        T.product_price = S.product_price,
-        T.product_quantity = S.product_quantity,
-        T.product_total_price = S.product_total_price,
-        T.product_discounted_total = S.product_discounted_total,
-        T.product_discount_amount = S.product_discount_amount,
-        T.gold_loaded_at = S.gold_loaded_at,
-        T.date = S.date
-    WHEN NOT MATCHED THEN
-      INSERT ROW;
-    """
-    client.query(merge_query).result()
-    print("Successfully merged data into the existing table based on order_id.")
+print(f"Successfully uploaded {len(combined_df)} rows to {table_id_gold}.")
