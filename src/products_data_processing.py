@@ -10,8 +10,9 @@ Original file is located at
 # Importing nessesary Modules
 import json
 import requests
-from datetime import datetime
 import pandas as pd
+from datetime import datetime
+from google.cloud import bigquery
 from pyspark.sql import SparkSession ,functions as F
 from pyspark.sql.functions import col, element_at , concat_ws ,current_timestamp
 from pyspark.sql.functions.builtin import product
