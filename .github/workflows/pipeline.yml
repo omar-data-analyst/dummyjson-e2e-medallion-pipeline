@@ -51,3 +51,7 @@ jobs:
     # 7.Run Orders Data Pipline
     - name: Run Orders Pipline
       run: python src/orders_data_processing.py
+
+    # 8.Run products_data_processing.py
+    - name: Run Products Pipline
+      run: python src/products_data_processing.py
