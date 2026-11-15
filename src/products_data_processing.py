@@ -10,9 +10,8 @@ Original file is located at
 # Importing nessesary Modules
 import json
 import requests
-import pandas as pd
 from datetime import datetime
-from google.cloud import bigquery
+import pandas as pd
 from pyspark.sql import SparkSession ,functions as F
 from pyspark.sql.functions import col, element_at , concat_ws ,current_timestamp
 from pyspark.sql.functions.builtin import product
@@ -133,8 +132,12 @@ print(f"Successfully uploaded {len(combined_df)} rows to {table_id_bronze}.")
 """
 
 # Filter Null id rows
-
-df_bronze = df_bronze.filter(F.col('id').isNotNull() & F.col('id') != '' & F.col('sku').isNotNull())
+df_bronze = df_bronze.filter(
+    (F.col('id').isNotNull()) & 
+    (F.col('id') != '') & 
+    (F.col('sku').isNotNull()) & 
+    (F.col('sku') != '')
+)
 df_bronze.show()
 
 """#### [1] Text Columns Cleaning Stage"""
