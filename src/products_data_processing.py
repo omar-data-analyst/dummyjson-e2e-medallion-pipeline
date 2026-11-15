@@ -183,13 +183,13 @@ df_silver = df_silver.replace(brand_mapping, subset=["brand"])
 df_silver.select('brand').distinct().show()
 
 # Replace Null Values in title col
-info_&_desc_columns = ['description', 'warrantyInformation', 'shippingInformation']
+info_and_desc_columns = ['description', 'warrantyInformation', 'shippingInformation']
 
-for column_name in info_&_desc_columns:
+for column_name in info_and_desc_columns:
     df_silver = df_silver.withColumn(column_name, F.when(F.col(column_name).isNull(), 'Unkown').otherwise(F.col(column_name)))
 
 # Show Results
-df_silver.select(info_&_desc_columns).distinct().show()
+df_silver.select(info_and_desc_columns).distinct().show()
 
 """#### [2] Numeric Columns Cleaning Stage"""
 
