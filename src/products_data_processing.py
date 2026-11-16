@@ -92,10 +92,9 @@ print(f"Successfully uploaded {len(combined_df)} rows to {table_id_bronze}.")
 # ==========================================
 # 3. Cleaning Stage & Silver Layer
 # ==========================================
-# الفلترة بتنسيق أقواس صحيح لمنع أخطاء الأنماط
 df_bronze = df_bronze.filter(
     (col('id').isNotNull()) & 
-    (col('id') != '') & 
+    (col('id') > 0) & 
     (col('sku').isNotNull()) & 
     (col('sku') != '')
 )
