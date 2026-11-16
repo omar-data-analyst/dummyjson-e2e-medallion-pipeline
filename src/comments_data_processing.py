@@ -136,7 +136,7 @@ print(f"Successfully uploaded {len(combined_silver)} rows to {table_id_silver}."
 df_gold = df_silver.withColumn('gold_loaded_at', current_timestamp())
 
 # Fact Comments Table
-fact_comments = df_gold.select([
+dim_comments = df_gold.select([
     'comment_id',
     'id',
     'postId',
@@ -148,7 +148,7 @@ fact_comments = df_gold.select([
 ])
 
 # Dimension Users Table
-dim_users = df_gold.select([
+dim_comments_users = df_gold.select([
     'comment_id',
     'user_id',
     'user_fullName',
