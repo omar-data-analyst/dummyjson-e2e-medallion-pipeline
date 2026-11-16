@@ -52,5 +52,5 @@ jobs:
     #  run: python src/orders_data_processing.py
 
     # 8.Run recipes_data_processing.py
-    - name: Run User Data Pipline
-      run: python src/user_data_processing.py
+    - name: Run weather_data_processing
+      run: python src/weather_data_processing.py
