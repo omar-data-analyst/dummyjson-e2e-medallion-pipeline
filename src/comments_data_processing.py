@@ -160,7 +160,7 @@ dim_users = df_gold.select([
 
 gold_tables = {
     'fact_comments': fact_comments,
-    'dim_users': dim_users
+    'dim_comments_users': dim_users
 }
 
 for table_name, df_table in gold_tables.items():
