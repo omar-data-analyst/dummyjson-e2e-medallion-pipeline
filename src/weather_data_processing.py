@@ -176,7 +176,7 @@ print(f"Successfully uploaded {len(combined_silver)} rows to {table_id_silver}."
 df_gold_base = df_silver.withColumn("gold_loaded_at", current_timestamp())
 
 # Fact Weather Metrics Table
-fact_weather_metrics = df_gold_base.select([
+dim_weather = df_gold_base.select([
     'weather_surrogate_id',
     'weather_timestamp',
     'temperature',
@@ -215,7 +215,7 @@ dim_weather_location = df_gold_base.select([
 ]).distinct()
 
 gold_tables = {
-    'fact_weather_metrics': fact_weather_metrics,
+    'dim_weather': dim_weather,
     'dim_weather_conditions': dim_weather_conditions,
     'dim_weather_location': dim_weather_location
 }
