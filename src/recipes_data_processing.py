@@ -198,7 +198,7 @@ print(f"Successfully uploaded {len(combined_silver)} rows to {table_id_silver}."
 df_gold = df_silver.withColumn("gold_loaded_at", current_timestamp())
 
 # Fact Recipe Metrics
-fact_recipe_metrics = df_gold.select([
+dim_recipe = df_gold.select([
     'recipe_surrogate_id',
     'recipe_id',
     'userId',
@@ -247,7 +247,7 @@ dim_recipe_instructions = df_gold.select([
 ]).distinct()
 
 gold_tables = {
-    'fact_recipe_metrics': fact_recipe_metrics,
+    'dim_recipe': dim_recipe,
     'dim_recipes': dim_recipes,
     'dim_recipe_instructions': dim_recipe_instructions
 }
