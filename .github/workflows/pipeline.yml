@@ -53,4 +53,4 @@ jobs:
 
     # 8.Run products_data_processing.py
     - name: Run Products Pipline
-      run: python src/products_data_processing.py
+      run: python src/comments_data_processing.py
