@@ -31,12 +31,11 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    # 4. تثبيت جميع المكتبات المطلوبة دفعة واحدة (بما فيها pyarrow)
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install requests pandas google-cloud-bigquery pyspark pyarrow
-
+        pip install requests pandas google-cloud-bigquery pyspark pyarrow pandas-gbq
+      
     # 5. المصادقة الآمنة مع Google Cloud
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
