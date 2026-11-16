@@ -92,6 +92,7 @@ print(f"Successfully uploaded {len(combined_df)} rows to {table_id_bronze}.")
 # ==========================================
 # 3. Cleaning Stage & Silver Layer
 # ==========================================
+# الفلترة الآمنة بدون مقارنة النص الفارغ مع الحقول الرقمية
 df_bronze = df_bronze.filter(
     (col('id').isNotNull()) & 
     (col('id') > 0) & 
