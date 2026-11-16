@@ -253,7 +253,7 @@ print(f"Successfully uploaded {len(combined_silver)} rows to {table_id_silver}."
 df_gold_base = df_silver.withColumn('gold_loaded_at', F.current_timestamp())
 
 # Dimension User Profiles
-dim_users_profile = df_gold_base.select([
+fact_users_profile = df_gold_base.select([
     'user_surrogate_id', 'id', 'firstName', 'lastName', 'maidenName',
     'age', 'gender', 'email', 'phone', 'username', 'birthDate',
     'bloodGroup', 'height', 'weight', 'eyeColor', 'role', 'image',
@@ -291,7 +291,7 @@ dim_users_digital_assets = df_gold_base.select([
 ])
 
 gold_tables = {
-    'dim_users_profile': dim_users_profile,
+    'fact_users_profile': fact_users_profile,
     'dim_users_location': dim_users_location,
     'dim_users_company': dim_users_company,
     'dim_users_banking': dim_users_banking,
