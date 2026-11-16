@@ -170,9 +170,9 @@ dim_prods_logistics_policies = df_gold.select([
 ]).distinct()
 
 gold_tables = {
-    'fact_inventory_sales': fact_prods_inventory_sales,
+    'fact_prods_inventory_sales': fact_prods_inventory_sales,
     'dim_products': dim_products,
-    'dim_logistics_policies': dim_prods_logistics_policies
+    'dim_prods_logistics_policies': dim_prods_logistics_policies
 }
 
 for table_name, df_table in gold_tables.items():
