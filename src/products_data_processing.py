@@ -152,13 +152,13 @@ df_gold = df_gold.withColumn('inventory_value', F.round(F.col('stock') * F.col('
 df_gold = df_gold.withColumn('product_volume', F.round(F.col('dimension_width') * F.col('dimension_height') * F.col('dimension_depth'), 2))
 df_gold = df_gold.withColumn('gold_loaded_at', current_timestamp())
 
-fact_prods_inventory_sales = df_gold.select([
+dim_products = df_gold.select([
     'product_id', 'id', 'sku', 'price', 'discountPercentage', 'final_price',
     'stock', 'inventory_value', 'rating', 'weight', 'product_volume',
     'minimumOrderQuantity', 'gold_loaded_at', 'silver_loaded_at', 'bronze_loaded_at'
 ])
 
-dim_products = df_gold.select([
+dim_products_profile = df_gold.select([
     'product_id', 'id', 'title', 'category', 'brand', 'all_tags',
     'created_at', 'description', 'gold_loaded_at', 'silver_loaded_at', 'bronze_loaded_at'
 ]).distinct()
@@ -170,9 +170,9 @@ dim_prods_logistics_policies = df_gold.select([
 ]).distinct()
 
 gold_tables = {
-    'fact_prods_inventory_sales': fact_prods_inventory_sales,
     'dim_products': dim_products,
-    'dim_prods_logistics_policies': dim_prods_logistics_policies
+    'dim_products_profile': dim_products_profile,
+    'dim_products_logistics_policies': dim_prods_logistics_policies
 }
 
 for table_name, df_table in gold_tables.items():
