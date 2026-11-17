@@ -159,8 +159,8 @@ dim_comments_users = df_gold.select([
 ]).distinct()
 
 gold_tables = {
-    'fact_comments': fact_comments,
-    'dim_comments_users': dim_users
+    'dim_comments': dim_comments,
+    'dim_comments_users': dim_comments_users
 }
 
 for table_name, df_table in gold_tables.items():
