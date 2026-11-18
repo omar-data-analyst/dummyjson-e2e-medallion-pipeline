@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
 import requests
-from datetime import datetime
 import pandas as pd
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.functions import col, current_timestamp, trim
@@ -45,13 +44,15 @@ df_bronze = raw_df.select(
     F.col('user.username').alias('user_username')
 )
 
-# Add bronze_loaded_at timestamp
+# إضافة ختم زمن البرونز وإنشاء المفتاح البديل بـ التاريخ اليومي الثابت (YYYY-MM-DD)
 df_bronze = df_bronze.withColumn("bronze_loaded_at", current_timestamp())
-
-# Add unique surrogate key (comment_id) for lineage and deduplication
 df_bronze = df_bronze.withColumn(
     'comment_id',
-    F.concat(F.col("id"), F.lit("_"), F.col("bronze_loaded_at").cast("string"))
+    F.concat(
+        F.col("id").cast("string"), 
+        F.lit("_"), 
+        F.date_format(F.col("bronze_loaded_at"), "yyyy-MM-dd")
+    )
 )
 
 project_id = "dummyjson-e2e-pipeline"
@@ -70,7 +71,6 @@ except Exception as e:
     print(f"Bronze table does not exist yet or first run. Using new data only. Error: {e}")
     combined_df = new_pandas_df
 
-# Ensure string datatype for keys to prevent PyArrow type mismatch
 combined_df['comment_id'] = combined_df['comment_id'].astype(str)
 
 job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
@@ -81,34 +81,34 @@ print(f"Successfully uploaded {len(combined_df)} rows to {table_id_bronze}.")
 # ==========================================
 # 3. Cleaning Stage & Silver Layer
 # ==========================================
-# Filter out null/invalid IDs
-df_bronze = df_bronze.filter(
+# الفلترة الأولية على نفس df_bronze
+df_silver = df_bronze.filter(
     (col('id').isNotNull()) & 
     (col('id') > 0) & 
     (col('postId').isNotNull()) & 
     (col('postId') > 0)
 )
 
-# Clean text columns (Trim & InitCap)
+# تنظيف المسافات والأسماء
 text_column_names = ['user_fullName', 'user_username']
 for name in text_column_names:
-    df_bronze = df_bronze.withColumn(
+    df_silver = df_silver.withColumn(
         name, trim(F.initcap(F.regexp_replace(F.col(name), r"\s+", " ")))
     )
 
-df_bronze = df_bronze.withColumn(
+df_silver = df_silver.withColumn(
     'body', trim(F.regexp_replace(F.col('body'), r"\s+", " "))
 )
 
-# Add engagement_tier based on likes count
-df_silver = df_bronze.withColumn(
+# إضافة Engagment Tier
+df_silver = df_silver.withColumn(
     'engagement_tier',
     F.when(F.col('likes') >= 8, F.lit('High Engagement'))
      .when(F.col('likes') >= 3, F.lit('Moderate'))
      .otherwise(F.lit('Low'))
 )
 
-# Add silver_loaded_at column
+# ختم زمن السيلفر
 df_silver = df_silver.withColumn("silver_loaded_at", current_timestamp())
 table_id_silver = f"{project_id}.silver.comments"
 
@@ -133,12 +133,14 @@ print(f"Successfully uploaded {len(combined_silver)} rows to {table_id_silver}."
 # ==========================================
 # 4. Gold Layer (Star Schema Model)
 # ==========================================
+# نقل البيانات المنظفة بالكامل إلى الجولد
 df_gold = df_silver.withColumn('gold_loaded_at', current_timestamp())
 
-# Fact Comments Table
+# Fact / Main Comments Dimension Table
 dim_comments = df_gold.select([
     'comment_id',
     'id',
+    'body',
     'postId',
     'likes',
     'engagement_tier',
@@ -147,8 +149,19 @@ dim_comments = df_gold.select([
     'bronze_loaded_at'
 ])
 
-# Dimension Users Table
+# Dimension Users Table for Comments
+# إنشاء مفتاح بديل يومي للمستخدم لتسهيل الربط السريع
+df_gold = df_gold.withColumn(
+    'user_comment_surrogate_id',
+    F.concat(
+        F.col("user_id").cast("string"), 
+        F.lit("_"), 
+        F.date_format(F.col("gold_loaded_at"), "yyyy-MM-dd")
+    )
+)
+
 dim_comments_users = df_gold.select([
+    'user_comment_surrogate_id',
     'comment_id',
     'user_id',
     'user_fullName',
@@ -167,17 +180,20 @@ for table_name, df_table in gold_tables.items():
     table_id_gold = f"{project_id}.gold.{table_name}"
     new_pandas_df = df_table.toPandas()
     
+    dedup_key = 'user_comment_surrogate_id' if table_name == 'dim_comments_users' else 'comment_id'
+    
     try:
         query = f"SELECT * FROM `{table_id_gold}`"
         old_pandas_df = client.query(query).to_dataframe()
         combined_gold = pd.concat([old_pandas_df, new_pandas_df], ignore_index=True)
-        combined_gold = combined_gold.drop_duplicates(subset=['comment_id'], keep='last')
+        combined_gold = combined_gold.drop_duplicates(subset=[dedup_key], keep='last')
         print(f"Successfully merged old data for {table_name}.")
     except Exception as e:
         print(f"Table {table_name} does not exist yet. Using new data only. Error: {e}")
         combined_gold = new_pandas_df
 
-    combined_gold['comment_id'] = combined_gold['comment_id'].astype(str)
+    if 'comment_id' in combined_gold.columns:
+        combined_gold['comment_id'] = combined_gold['comment_id'].astype(str)
 
     job = client.load_table_from_dataframe(combined_gold, table_id_gold, job_config=job_config)
     job.result()
