@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
 import requests
-from datetime import datetime
 import pandas as pd
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.functions import col, current_timestamp, trim
@@ -54,13 +53,15 @@ df_bronze = raw_df.select(
     F.concat_ws(", ", F.col("tags")).alias("recipe_tags")
 )
 
-# Add bronze_loaded_at timestamp
+# إضافة ختم البرونز وإنشاء المفتاح البديل اليومي الثابت (YYYY-MM-DD)
 df_bronze = df_bronze.withColumn("bronze_loaded_at", current_timestamp())
-
-# Add unique surrogate key for deduplication and lineage
 df_bronze = df_bronze.withColumn(
     'recipe_surrogate_id',
-    F.concat(F.col("recipe_id"), F.lit("_"), F.col("bronze_loaded_at").cast("string"))
+    F.concat(
+        F.col("recipe_id").cast("string"), 
+        F.lit("_"), 
+        F.date_format(F.col("bronze_loaded_at"), "yyyy-MM-dd")
+    )
 )
 
 project_id = "dummyjson-e2e-pipeline"
@@ -79,7 +80,6 @@ except Exception as e:
     print(f"Bronze table does not exist yet or first run. Using new data only. Error: {e}")
     combined_df = new_pandas_df
 
-# Ensure string type for key column to prevent PyArrow conversion errors
 combined_df['recipe_surrogate_id'] = combined_df['recipe_surrogate_id'].astype(str)
 
 job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
@@ -90,21 +90,21 @@ print(f"Successfully uploaded {len(combined_df)} rows to {table_id_bronze}.")
 # ==========================================
 # 3. Cleaning Stage & Silver Layer
 # ==========================================
-# Filter valid numeric IDs (avoiding string comparison on numeric types)
-df_bronze = df_bronze.filter(
+# الفلترة الأولية للأعمدة على df_bronze
+df_silver = df_bronze.filter(
     (col('recipe_id').isNotNull()) & 
     (col('recipe_id') > 0)
 )
 
-# Text columns cleaning stage
+# تنظيف المسافات والنصوص
 text_column_names = ['ingredients_list', 'instructions_steps', 'meal_types', 'difficulty', 'cuisine', 'recipe_tags', 'recipe_name']
 for name in text_column_names:
-    df_bronze = df_bronze.withColumn(
+    df_silver = df_silver.withColumn(
         name, trim(F.regexp_replace(F.col(name), r"\s+", " "))
     )
 
-# Numeric columns cleaning stage
-df_bronze = df_bronze.withColumn(
+# تنظيف وتحسين الأعمدة الرقمية
+df_silver = df_silver.withColumn(
     "caloriesPerServing",
     F.when((F.col("caloriesPerServing") == 0) | (F.col("caloriesPerServing").isNull()), F.lit(300))
      .otherwise(F.abs(F.col("caloriesPerServing")))
@@ -112,14 +112,14 @@ df_bronze = df_bronze.withColumn(
 
 time_columns = ['cookTimeMinutes', 'prepTimeMinutes', 'servings']
 for col_name in time_columns:
-    df_bronze = df_bronze.withColumn(
+    df_silver = df_silver.withColumn(
         col_name,
         F.when((F.col(col_name) <= 0) | (F.col(col_name).isNull()), F.lit(1))
          .otherwise(F.col(col_name))
     )
 
-# Data quality audit status
-df_bronze = df_bronze.withColumn(
+# إضافة حالة التدقيق للحسابات
+df_silver = df_silver.withColumn(
     'calculation_audit_status',
     F.when(~F.col('caloriesPerServing').between(10, 5000), F.lit('ERROR: Invalid Calories Range'))
      .when(~F.col('prepTimeMinutes').between(1, 1440), F.lit('ERROR: Invalid Prep Time'))
@@ -127,8 +127,8 @@ df_bronze = df_bronze.withColumn(
      .otherwise(F.lit('ALL_VALID'))
 )
 
-# Feature Engineering / Categorical Enrichment for Silver
-df_silver = df_bronze.withColumn(
+# Feature Engineering للطبقة الفضية
+df_silver = df_silver.withColumn(
     'rating_category',
     F.when(F.col('rating') >= 4.0, 'Good')
      .when(F.col('rating') >= 3.0, 'Average')
@@ -170,7 +170,7 @@ df_silver = df_silver.withColumn(
      .otherwise(F.lit('Complex (10+)'))
 )
 
-# Add silver_loaded_at timestamp
+# ختم زمن السيلفر
 df_silver = df_silver.withColumn("silver_loaded_at", current_timestamp())
 table_id_silver = f"{project_id}.silver.recipes"
 
@@ -195,6 +195,7 @@ print(f"Successfully uploaded {len(combined_silver)} rows to {table_id_silver}."
 # ==========================================
 # 4. Gold Layer (Star Schema Model)
 # ==========================================
+# نقل كامل البيانات المنظفة والمثرية إلى الجولد
 df_gold = df_silver.withColumn("gold_loaded_at", current_timestamp())
 
 # Fact Recipe Metrics
