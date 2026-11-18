@@ -125,7 +125,7 @@ df_bronze = df_bronze.withColumn('price',
 df_bronze = df_bronze.withColumn('created_at', F.to_date(F.to_timestamp(F.col('created_at'), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")))
 df_bronze = df_bronze.withColumn('updated_at', F.to_date(F.to_timestamp(F.col('updated_at'), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")))
 
-df_silver = df_bronze.withColumn("silver_loaded_at", current_timestamp())
+df_silver = df_silver.withColumn("silver_loaded_at", current_timestamp())
 table_id_silver = f"{project_id}.silver.products"
 
 new_pandas_df_silver = df_silver.toPandas()
