@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 import json
 import requests
-from datetime import datetime
 import pandas as pd
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.functions import col, current_timestamp, trim, to_date, coalesce
-from pyspark.sql.types import StringType, NumericType
+from pyspark.sql.types import StringType
 from google.cloud import bigquery
 
 # ==========================================
@@ -98,13 +97,15 @@ df_bronze = raw_df.select(
     F.col("hair.type").alias("hair_type")
 )
 
-# Add bronze_loaded_at timestamp
+# إضافة الختم الزمني للبرونز والمفتاح البديل اليومي الثابت (YYYY-MM-DD)
 df_bronze = df_bronze.withColumn("bronze_loaded_at", current_timestamp())
-
-# Create unique surrogate key for tracking and deduplication
 df_bronze = df_bronze.withColumn(
     'user_surrogate_id',
-    F.concat(F.col("id"), F.lit("_"), F.col("bronze_loaded_at").cast("string"))
+    F.concat(
+        F.col("id").cast("string"), 
+        F.lit("_"), 
+        F.date_format(F.col("bronze_loaded_at"), "yyyy-MM-dd")
+    )
 )
 
 project_id = "dummyjson-e2e-pipeline"
@@ -123,7 +124,6 @@ except Exception as e:
     print(f"Bronze table does not exist yet or first run. Using new data only. Error: {e}")
     combined_df = new_pandas_df
 
-# Ensure explicit string datatype for Arrow/BigQuery compatibility
 combined_df['user_surrogate_id'] = combined_df['user_surrogate_id'].astype(str)
 
 job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
@@ -134,29 +134,27 @@ print(f"Successfully uploaded {len(combined_df)} rows to {table_id_bronze}.")
 # ==========================================
 # 3. Cleaning Stage & Silver Layer
 # ==========================================
-# Filter primary keys and core fields safely
-df_bronze = df_bronze.filter(
+# الفلترة الأولية للأعمدة الرئيسية من df_bronze مباشرة
+df_silver = df_bronze.filter(
     (col('id').isNotNull()) & 
     (col('id') > 0) & 
     (col('email').isNotNull()) & 
     (col('email') != '')
 )
 
-df_bronze = df_bronze.dropDuplicates(['id'])
-
-# Trim string columns
-string_column_names = [field.name for field in df_bronze.schema.fields if isinstance(field.dataType, StringType)]
+# تنظيف المسافات الزائدة
+string_column_names = [field.name for field in df_silver.schema.fields if isinstance(field.dataType, StringType)]
 for column_name in string_column_names:
-    df_bronze = df_bronze.withColumn(column_name, F.regexp_replace(F.col(column_name), r"\s+", " "))
+    df_silver = df_silver.withColumn(column_name, F.regexp_replace(F.col(column_name), r"\s+", " "))
 
-# IP Address Validation
+# التحقق من صحة عناوين الـ IP
 ip_regex = r"^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
-df_bronze = df_bronze.withColumn(
+df_silver = df_silver.withColumn(
     "ip",
     F.when(F.col("ip").rlike(ip_regex), F.col("ip")).otherwise(F.lit(None))
 )
 
-# Replace missing textual fields with 'Unknown'
+# استبدال القيم المفقودة بـ Unknown
 unknown_fill_columns = [
     'company_name', 'company_department', 'company_title', 'company_address_street',
     'company_address_city', 'company_address_state', 'company_address_country',
@@ -164,58 +162,57 @@ unknown_fill_columns = [
     'crypto_wallet', 'crypto_network'
 ]
 for col_name in unknown_fill_columns:
-    df_bronze = df_bronze.withColumn(
+    df_silver = df_silver.withColumn(
         col_name,
         F.when((F.col(col_name).isNull()) | (F.col(col_name) == ''), "Unknown")
          .otherwise(F.col(col_name))
     )
 
-# MAC Address Validation
+# التحقق من صحة الـ MAC Address
 mac_regex = r"^([0-9a-fA-F]{2}[:-]){5}([0-9a-fA-F]{2})$"
-df_bronze = df_bronze.withColumn(
+df_silver = df_silver.withColumn(
     "macAddress",
     F.when(F.col("macAddress").rlike(mac_regex), F.col("macAddress")).otherwise(F.lit(None))
 )
 
-# Blood Group Standardization
+# توحيد فصائل الدم
 valid_blood_groups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
-df_bronze = df_bronze.withColumn(
+df_silver = df_silver.withColumn(
     'bloodGroup',
     F.when(F.col('bloodGroup').isin(valid_blood_groups), F.col('bloodGroup')).otherwise(F.lit('Unknown'))
 )
 
-# Phone Number Validation
+# التحقق من صحة رقم الهاتف والبريد الإلكتروني
 phone_pattern = r'^\+\d{1,3}\s\d{3}-\d{3}-\d{4}$'
-df_bronze = df_bronze.withColumn(
+df_silver = df_silver.withColumn(
     'phone',
     F.when(F.col('phone').rlike(phone_pattern), F.col('phone')).otherwise(F.lit(None))
 )
 
-# Email Validation
 email_regex = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
-df_bronze = df_bronze.withColumn(
+df_silver = df_silver.withColumn(
     "email",
     F.when(F.col("email").rlike(email_regex), F.col("email")).otherwise(F.lit(None))
 )
 
-# Gender Standardization
-df_bronze = df_bronze.withColumn(
+# توحيد النوع/الجنس
+df_silver = df_silver.withColumn(
     "gender",
     F.when(F.lower(F.col("gender")).isin(["male", "m"]), F.lit("male"))
      .when(F.lower(F.col("gender")).isin(["female", "f"]), F.lit("female"))
      .otherwise(F.lit("Unknown"))
 )
 
-# Clean Numeric Bounds (age, height, weight)
+# تنظيف الحدود الرقمية (السن، الطول، الوزن)
 bounds = {'age': (0, 120), 'height': (40, 250), 'weight': (2, 300)}
 for col_name, (min_value, max_value) in bounds.items():
-    df_bronze = df_bronze.withColumn(
+    df_silver = df_silver.withColumn(
         col_name,
         F.when((F.col(col_name) < min_value) | (F.col(col_name) > max_value), F.lit(None))
          .otherwise(F.col(col_name))
     )
 
-# Date Normalization
+# توحيد صيغ تاريخ الميلاد
 date_formats = [
     "yyyy-M-d", "yyyy-MM-dd", "yyyy/MM/dd", "MM/dd/yyyy",
     "dd/MM/yyyy", "dd-MM-yyyy", "MM-dd-yyyy", "MMM dd, yyyy",
@@ -223,10 +220,10 @@ date_formats = [
 ]
 trimmed_date = trim(col("birthDate"))
 date_expressions = [to_date(trimmed_date, fmt) for fmt in date_formats]
-df_bronze = df_bronze.withColumn("birthDate", coalesce(*date_expressions))
+df_silver = df_silver.withColumn("birthDate", coalesce(*date_expressions))
 
-# Silver Loaded At timestamp
-df_silver = df_bronze.withColumn('silver_loaded_at', F.current_timestamp())
+# إضافة الختم الزمني للـ Silver
+df_silver = df_silver.withColumn('silver_loaded_at', F.current_timestamp())
 table_id_silver = f"{project_id}.silver.users"
 
 new_pandas_df_silver = df_silver.toPandas()
@@ -250,6 +247,7 @@ print(f"Successfully uploaded {len(combined_silver)} rows to {table_id_silver}."
 # ==========================================
 # 4. Gold Layer (Star Schema Model)
 # ==========================================
+# إضافة الختم الزمني للطبقة الذهبية على البيانات المنظفة بالكامل
 df_gold_base = df_silver.withColumn('gold_loaded_at', F.current_timestamp())
 
 # Dimension User Profiles
