@@ -51,13 +51,15 @@ df_bronze = raw_df.select(
     F.col("interval")
 )
 
-# Add bronze_loaded_at timestamp
+# إضافة ختم البرونز والمفتاح البديل المعتمد على التاريخ اليومي الثابت (YYYY-MM-DD)
 df_bronze = df_bronze.withColumn("bronze_loaded_at", current_timestamp())
-
-# Create unique surrogate key (weather_surrogate_id) for tracking and deduplication
 df_bronze = df_bronze.withColumn(
     'weather_surrogate_id',
-    F.concat(F.regexp_replace(F.col("time"), r"[^0-9]", ""), F.lit("_"), F.col("bronze_loaded_at").cast("string"))
+    F.concat(
+        F.regexp_replace(F.col("time"), r"[^0-9]", ""), 
+        F.lit("_"), 
+        F.date_format(F.col("bronze_loaded_at"), "yyyy-MM-dd")
+    )
 )
 
 project_id = "dummyjson-e2e-pipeline"
@@ -76,7 +78,6 @@ except Exception as e:
     print(f"Bronze table does not exist yet or first run. Using new data only. Error: {e}")
     combined_df = new_pandas_df
 
-# Ensure explicit string datatype for Arrow/BigQuery compatibility
 combined_df['weather_surrogate_id'] = combined_df['weather_surrogate_id'].astype(str)
 
 job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
@@ -145,7 +146,7 @@ def clean_weather_data(df):
 
     return df_clean
 
-# Apply Cleaning
+# Apply Cleaning on df_bronze directly
 df_silver = clean_weather_data(df_bronze)
 
 # Add silver_loaded_at timestamp
