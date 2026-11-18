@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
 import requests
-from datetime import datetime
 import pandas as pd
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.functions import col, concat_ws, current_timestamp
@@ -29,7 +28,7 @@ else:
     print('Error Connection')
 
 raw_df.printSchema()
-raw_df.show()
+raw_df.show(5)
 
 # ==========================================
 # 2. Bronze Layer
@@ -60,13 +59,16 @@ df_bronze = raw_df.select(
         col("minimumOrderQuantity")
 )
 
+# إضافة ختم البرونز والمفتاح البديل اليومي الثابت (YYYY-MM-DD)
 df_bronze = df_bronze.withColumn("bronze_loaded_at", current_timestamp())
-df_bronze = df_bronze.withColumn('product_id',
-             F.concat(F.col("id"),
-                      F.lit("_"),
-                      F.col("bronze_loaded_at").cast("string")
-                      )
-            )
+df_bronze = df_bronze.withColumn(
+    'product_id',
+    F.concat(
+        F.col("id").cast("string"),
+        F.lit("_"),
+        F.date_format(F.col("bronze_loaded_at"), "yyyy-MM-dd")
+    )
+)
 
 project_id = "dummyjson-e2e-pipeline"
 table_id_bronze = f"{project_id}.bronze.products"
@@ -84,6 +86,8 @@ except Exception as e:
     print(f"Bronze table does not exist yet or first run. Using new data only. Error: {e}")
     combined_df = new_pandas_df
 
+combined_df['product_id'] = combined_df['product_id'].astype(str)
+
 job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
 job = client.load_table_from_dataframe(combined_df, table_id_bronze, job_config=job_config)
 job.result()
@@ -93,20 +97,21 @@ print(f"Successfully uploaded {len(combined_df)} rows to {table_id_bronze}.")
 # 3. Cleaning Stage & Silver Layer
 # ==========================================
 # الفلترة الآمنة بدون مقارنة النص الفارغ مع الحقول الرقمية
-df_bronze = df_bronze.filter(
+df_silver = df_bronze.filter(
     (col('id').isNotNull()) & 
     (col('id') > 0) & 
     (col('sku').isNotNull()) & 
     (col('sku') != '')
 )
 
-string_column_names = [field.name for field in df_bronze.schema.fields if isinstance(field.dataType, StringType)]
+string_column_names = [field.name for field in df_silver.schema.fields if isinstance(field.dataType, StringType)]
 for column_name in string_column_names:
-    df_bronze = df_bronze.withColumn(column_name, F.regexp_replace(F.col(column_name), r"\s+", " "))
+    df_silver = df_silver.withColumn(column_name, F.regexp_replace(F.col(column_name), r"\s+", " "))
 
-df_silver = df_bronze.withColumn('brand',
-                                 F.when(F.col('brand').isNull(), 'Unkown')
-                                  .otherwise(F.col('brand')))
+df_silver = df_silver.withColumn(
+    'brand',
+    F.when(F.col('brand').isNull(), 'Unknown').otherwise(F.col('brand'))
+)
 
 brand_mapping = {
     "Guchi": "Gucci", "Guzzi": "Gucci", "Chanell": "Chanel",
@@ -116,14 +121,18 @@ df_silver = df_silver.replace(brand_mapping, subset=["brand"])
 
 info_and_desc_columns = ['description', 'warrantyInformation', 'shippingInformation']
 for column_name in info_and_desc_columns:
-    df_silver = df_silver.withColumn(column_name, F.when(F.col(column_name).isNull(), 'Unkown').otherwise(F.col(column_name)))
+    df_silver = df_silver.withColumn(
+        column_name, 
+        F.when(F.col(column_name).isNull(), 'Unknown').otherwise(F.col(column_name))
+    )
 
-df_bronze = df_bronze.withColumn('price',
-                                 F.when(F.col('price') < 0, F.abs(F.col('price')))
-                                  .otherwise(F.col('price')))
+df_silver = df_silver.withColumn(
+    'price',
+    F.when(F.col('price') < 0, F.abs(F.col('price'))).otherwise(F.col('price'))
+)
 
-df_bronze = df_bronze.withColumn('created_at', F.to_date(F.to_timestamp(F.col('created_at'), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")))
-df_bronze = df_bronze.withColumn('updated_at', F.to_date(F.to_timestamp(F.col('updated_at'), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")))
+df_silver = df_silver.withColumn('created_at', F.to_date(F.to_timestamp(F.col('created_at'), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")))
+df_silver = df_silver.withColumn('updated_at', F.to_date(F.to_timestamp(F.col('updated_at'), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")))
 
 df_silver = df_silver.withColumn("silver_loaded_at", current_timestamp())
 table_id_silver = f"{project_id}.silver.products"
@@ -139,6 +148,8 @@ try:
 except Exception as e:
     print(f"Silver table does not exist yet or first run. Using new data only. Error: {e}")
     combined_silver = new_pandas_df_silver
+
+combined_silver['product_id'] = combined_silver['product_id'].astype(str)
 
 job = client.load_table_from_dataframe(combined_silver, table_id_silver, job_config=job_config)
 job.result()
@@ -188,6 +199,8 @@ for table_name, df_table in gold_tables.items():
     except Exception as e:
         print(f"Table {table_name} does not exist yet. Using new data only. Error: {e}")
         combined_gold = new_pandas_df
+
+    combined_gold['product_id'] = combined_gold['product_id'].astype(str)
 
     job = client.load_table_from_dataframe(combined_gold, table_id_gold, job_config=job_config)
     job.result()
