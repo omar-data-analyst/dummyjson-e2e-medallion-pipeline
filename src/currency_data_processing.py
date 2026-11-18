@@ -9,15 +9,14 @@ Original file is located at
 # **Currency Data Processing**
 """
 
-# Importing nessesary Modules
+# Importing necessary Modules
 import json
 import requests
 from google.cloud import bigquery
 from datetime import datetime
-from pyspark.sql import SparkSession ,functions as F
-from pyspark.sql.functions.builtin import product
-from pyspark.sql.types import StringType , NumericType , DateType
-from pyspark.sql.functions import col, element_at , concat_ws ,current_timestamp ,to_date, coalesce, trim, date_format, to_date, coalesce, lit ,when
+from pyspark.sql import SparkSession, functions as F
+from pyspark.sql.types import StringType, NumericType, DateType
+from pyspark.sql.functions import col, current_timestamp, to_date, trim, date_format, lit, when
 
 """## Export Data From Api"""
 
@@ -50,80 +49,82 @@ else:
 
 # Show Results
 raw_df.printSchema()
-raw_df.show(100)
+raw_df.show(5)
 
 """## **Bronze Layer**
 Processing & Staging Data to ready for Silver Layer
-
-### Uploading Data to bronze layer
 """
 
-project_id = "dummyjson-e2e-pipeline"
-client = bigquery.Client(project=project_id)
-
-# Convert Spark DataFrame to Pandas for easy loading via BigQuery Python Client
-pandas_df_bronze = raw_df.toPandas()
-
-# Define table path in the bronze layer
-table_id_bronze = f"{project_id}.bronze.currency_raw"
-job_config = bigquery.LoadJobConfig(
-    write_disposition="WRITE_TRUNCATE"  # Overwrite old data with the latest exchange rate on each automated run
-)
-
-job = client.load_table_from_dataframe(pandas_df_bronze, table_id_bronze, job_config=job_config)
-job.result()
-
-print(f"Successfully uploaded {job.output_rows} rows to the Bronze layer table in BigQuery.")
-
-"""### Cleaning Stage"""
-
-# Uppercase Currency Column and Clean Text Columns
-df_bronze = raw_df
-
-df_bronze = (
-    df_bronze.withColumn("currency", F.trim(F.upper(F.col("currency"))))
-    # Convert date column
-    .withColumn("date", F.col("date").cast(DateType()))
-    # Drop Duplicates
-    .dropDuplicates(["base", "currency", "date"])
-    # Filter From Null Values & Unlogical values in rate column
-    .filter(
-        F.col("currency").isNotNull()
-        & F.col("rate").isNotNull()
-        & (F.col("rate") > 0)
+# إضافة ختم البرونز والمفتاح البديل للعملة (Currency_Date)
+df_bronze = raw_df.withColumn("bronze_loaded_at", current_timestamp())
+df_bronze = df_bronze.withColumn(
+    "currency_surrogate_id",
+    F.concat(
+        F.upper(F.col("currency")),
+        F.lit("_"),
+        F.col("date")
     )
 )
 
-# Show Results
-df_bronze.show()
-
-"""## Silver Layer
-- processing Data for Silver layer
-- Staging Data for Gold Layer
-"""
-
-# Processing Data
-
-# Add 'silver_loaded_at'
-df_silver = df_bronze.withColumn("silver_loaded_at", current_timestamp())
-
 project_id = "dummyjson-e2e-pipeline"
 client = bigquery.Client(project=project_id)
+table_id_bronze = f"{project_id}.bronze.currency_raw"
 
-# Convert Spark DataFrame to Pandas for easy loading via BigQuery Python Client
-pandas_df_silver = df_silver.toPandas()
+new_pandas_df = df_bronze.toPandas()
 
-# Define table path in the Silver layer
-table_id_silver = f"{project_id}.silver.currency"
-job_config = bigquery.LoadJobConfig(
-    write_disposition="WRITE_TRUNCATE"  # Overwrite old data with the latest exchange rate on each automated run
-)
+try:
+    query = f"SELECT * FROM `{table_id_bronze}`"
+    old_pandas_df = client.query(query).to_dataframe()
+    combined_df = pd.concat([old_pandas_df, new_pandas_df], ignore_index=True)
+    combined_df = combined_df.drop_duplicates(subset=['currency_surrogate_id'], keep='last')
+    print("Successfully merged old bronze data with new data locally.")
+except Exception as e:
+    print(f"Bronze table does not exist yet or first run. Using new data only. Error: {e}")
+    combined_df = new_pandas_df
 
-job = client.load_table_from_dataframe(pandas_df_silver, table_id_silver, job_config=job_config)
+combined_df['currency_surrogate_id'] = combined_df['currency_surrogate_id'].astype(str)
+
+job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+job = client.load_table_from_dataframe(combined_df, table_id_bronze, job_config=job_config)
 job.result()
 
-# Show Results
-print(f"Successfully uploaded {job.output_rows} rows to the Silver layer table in BigQuery.")
+print(f"Successfully uploaded {len(combined_df)} rows to the Bronze layer table in BigQuery.")
+
+"""### Cleaning Stage"""
+
+# Cleaning Stage & Silver Preparation
+df_silver = df_bronze.withColumn("currency", F.trim(F.upper(F.col("currency"))))
+df_silver = df_silver.withColumn("date", F.col("date").cast(DateType()))
+
+# تصفية القيم الخاطئة أو المعدومة
+df_silver = df_silver.filter(
+    F.col("currency").isNotNull()
+    & F.col("rate").isNotNull()
+    & (F.col("rate") > 0)
+)
+
+# إضافة ختم السيلفر
+df_silver = df_silver.withColumn("silver_loaded_at", current_timestamp())
+
+table_id_silver = f"{project_id}.silver.currency"
+new_pandas_df_silver = df_silver.toPandas()
+
+try:
+    query = f"SELECT * FROM `{table_id_silver}`"
+    old_pandas_df = client.query(query).to_dataframe()
+    combined_silver = pd.concat([old_pandas_df, new_pandas_df_silver], ignore_index=True)
+    combined_silver = combined_silver.drop_duplicates(subset=['currency_surrogate_id'], keep='last')
+    print("Successfully merged old Silver data with new data locally.")
+except Exception as e:
+    print(f"Silver table does not exist yet or first run. Using new data only. Error: {e}")
+    combined_silver = new_pandas_df_silver
+
+combined_silver['currency_surrogate_id'] = combined_silver['currency_surrogate_id'].astype(str)
+
+job = client.load_table_from_dataframe(combined_silver, table_id_silver, job_config=job_config)
+job.result()
+
+print(f"Successfully uploaded {len(combined_silver)} rows to the Silver layer table in BigQuery.")
 
 """## Gold Layer
 - processing Data for Gold layer
@@ -132,20 +133,33 @@ print(f"Successfully uploaded {job.output_rows} rows to the Silver layer table i
 # Add 'gold_loaded_at'
 df_gold = df_silver.withColumn("gold_loaded_at", current_timestamp())
 
-project_id = "dummyjson-e2e-pipeline"
-client = bigquery.Client(project=project_id)
+dim_currency = df_gold.select([
+    'currency_surrogate_id',
+    'base',
+    'currency',
+    'rate',
+    'date',
+    'gold_loaded_at',
+    'silver_loaded_at',
+    'bronze_loaded_at'
+])
 
-# Convert Spark DataFrame to Pandas for easy loading via BigQuery Python Client
-pandas_df_gold = df_gold.toPandas()
-
-# Define table path in the Gold layer
 table_id_gold = f"{project_id}.gold.dim_currency"
-job_config = bigquery.LoadJobConfig(
-    write_disposition="WRITE_TRUNCATE"  # Overwrite old data with the latest exchange rate on each automated run
-)
+new_pandas_df_gold = dim_currency.toPandas()
 
-job = client.load_table_from_dataframe(pandas_df_gold, table_id_gold, job_config=job_config)
+try:
+    query = f"SELECT * FROM `{table_id_gold}`"
+    old_pandas_df = client.query(query).to_dataframe()
+    combined_gold = pd.concat([old_pandas_df, new_pandas_df_gold], ignore_index=True)
+    combined_gold = combined_gold.drop_duplicates(subset=['currency_surrogate_id'], keep='last')
+    print("Successfully merged old Gold data with new data locally.")
+except Exception as e:
+    print(f"Gold table does not exist yet. Using new data only. Error: {e}")
+    combined_gold = new_pandas_df_gold
+
+combined_gold['currency_surrogate_id'] = combined_gold['currency_surrogate_id'].astype(str)
+
+job = client.load_table_from_dataframe(combined_gold, table_id_gold, job_config=job_config)
 job.result()
 
-# Show Results
-print(f"Successfully uploaded {job.output_rows} rows to the Gold layer table in BigQuery.")
+print(f"Successfully uploaded {len(combined_gold)} rows to the Gold layer table in BigQuery.")
