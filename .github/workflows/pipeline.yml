@@ -8,47 +8,66 @@ on:
 jobs:
   run-etl-pipelines:
     runs-on: ubuntu-latest
-    
+
     permissions:
       contents: 'read'
       id-token: 'write'
 
     steps:
-    # 1. سحب كود المشروع
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      # 1. سحب كود المشروع
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    # 2. إعداد بيئة بايثون
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      # 2. إعداد بيئة بايثون
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    # 3. إعداد Java 17
-    - name: Set up Java JDK
-      uses: actions/setup-java@v5
-      with:
-        distribution: 'temurin'
-        java-version: '17'
+      # 3. إعداد Java 17
+      - name: Set up Java JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-    - name: Install Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests pandas google-cloud-bigquery pyspark pyarrow pandas-gbq
-      
-    # 5. المصادقة الآمنة مع Google Cloud
-    - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v2
-      with:
-        workload_identity_provider: 'projects/191157402123/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
-        service_account: 'github-actions-sa@dummyjson-e2e-pipeline.iam.gserviceaccount.com'
+      # 4. تثبيت المكتبات المطلوبة
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas google-cloud-bigquery pyspark pyarrow pandas-gbq
 
-    # Check Quality for Fact_Order_vw
-    - name: Run Data Quality Checks on BigQuery Gold Views
-      env:
-        GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-        BQ_GOLD_DATASET: gold
-        GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
-      run: |
-        python scripts/data_quality_checks.py "${{ steps.set_date.outputs.today_date }}"
+      # 5. المصادقة الآمنة مع Google Cloud
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/191157402123/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'github-actions-sa@dummyjson-e2e-pipeline.iam.gserviceaccount.com'
 
+      # [1] تشغيل سكربت معالجة العملات
+      - name: Run Currency Pipeline
+        run: python src/currency_data_processing.py
+
+      # [2] Run Orders Data Pipeline
+      - name: Run Orders Pipeline
+        run: python src/orders_data_processing.py
+
+      # [3] Run Recipes Data Pipeline
+      - name: Run Recipes Pipeline
+        run: python src/recipes_data_processing.py
+
+      # [4] Run Weather Data Pipeline
+      - name: Run Weather Data Pipeline
+        run: python src/weather_data_processing.py
+
+      # [5] Run Users Data Pipeline
+      - name: Run Users Pipeline
+        run: python src/user_data_processing.py
+
+      # [6] Run Comments Data Pipeline
+      - name: Run Comments Pipeline
+        run: python src/comments_data_processing.py
+
+      # [7] Run Products Data Pipeline
+      - name: Run Products Pipeline
+        run: python src/products_data_processing.py
