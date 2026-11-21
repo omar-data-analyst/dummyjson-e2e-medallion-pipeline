@@ -43,31 +43,12 @@ jobs:
         workload_identity_provider: 'projects/191157402123/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
         service_account: 'github-actions-sa@dummyjson-e2e-pipeline.iam.gserviceaccount.com'
 
-    # [1] تشغيل سكربت معالجة العملات
-    - name: Run Currency Pipeline
-      run: python src/currency_data_processing.py
-
-    # [2] Run Orders Data Pipline
-    - name: Run Orders Pipline
-      run: python src/orders_data_processing.py
-
-    # [3] Run Recipes Data Pipline
-    - name: Run Recipes Data Pipline
-      run: python src/recipes_data_processing.py
-
-    # [4] Run Weather Data Pipline
-    - name: Run weather data Pipline
-      run: python src/weather_data_processing.py
-
-    # [5] Run Users Data Pipline
-    - name: Run Users Data Pipline
-      run: python src/user_data_processing.py
-
-    # [6] Run Comments Data Pipline
-    - name: Run Comments Data Pipline
-      run: python src/comments_data_processing.py
-
-    # [7] Run Comments Data Pipline
-    - name: Run Products Data Pipline
-      run: python src/products_data_processing.py
+    # Check Quality for Fact_Order_vw
+    - name: Run Data Quality Checks on BigQuery Gold Views
+      env:
+        GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        BQ_GOLD_DATASET: gold
+        GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
+      run: |
+        python scripts/data_quality_checks.py "${{ steps.set_date.outputs.today_date }}"
 
